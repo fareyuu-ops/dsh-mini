@@ -1,0 +1,19 @@
+# 构建产物
+out/
+*.apk
+*.apk.idsig
+
+# 编译中间产物
+*.class
+*.dex
+build/
+.gradle/
+
+# 编辑器
+.idea/
+.vscode/
+*.iml
+
+# 系统
+.DS_Store
+Thumbs.db
