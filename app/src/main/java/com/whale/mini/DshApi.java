@@ -97,19 +97,27 @@ public class DshApi {
     }
 
     /**
-     * 带图片的消息。图片走 content 里的 image 块：
+     * 带多张图片的消息。图片走 content 里的 image 块：
      * {"type":"image","mediaType":"image/png","data":"<base64>","name":"x.png"}
+     * 传 null / 空数组就是纯文本。
      */
-    public void sendPrompt(String sessionId, String text, byte[] image, String mediaType, String name)
+    public void sendPrompt(String sessionId, String text,
+                           List<byte[]> images, List<String> mediaTypes, List<String> names)
             throws IOException, JSONException {
         JSONArray content = new JSONArray();
-        if (image != null && image.length > 0 && mediaType != null) {
-            JSONObject img = new JSONObject();
-            img.put("type", "image");
-            img.put("mediaType", mediaType);
-            img.put("data", android.util.Base64.encodeToString(image, android.util.Base64.NO_WRAP));
-            if (name != null && name.length() > 0) img.put("name", name);
-            content.put(img);
+        if (images != null) {
+            for (int i = 0; i < images.size(); i++) {
+                byte[] img = images.get(i);
+                if (img == null || img.length == 0) continue;
+                String mime = (mediaTypes != null && i < mediaTypes.size()) ? mediaTypes.get(i) : "image/png";
+                String name = (names != null && i < names.size()) ? names.get(i) : null;
+                JSONObject block = new JSONObject();
+                block.put("type", "image");
+                block.put("mediaType", mime);
+                block.put("data", android.util.Base64.encodeToString(img, android.util.Base64.NO_WRAP));
+                if (name != null && name.length() > 0) block.put("name", name);
+                content.put(block);
+            }
         }
         if (text != null && text.length() > 0) {
             JSONObject block = new JSONObject();
@@ -149,6 +157,66 @@ public class DshApi {
         return android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
     }
 
+    /** 取消当前会话正在进行的生成（服务端会随后推 turn/end，reason=cancelled）。 */
+    public void cancelSession(String sessionId) throws IOException, JSONException {
+        JSONObject request = new JSONObject();
+        request.put("sessionId", sessionId);
+        JSONObject args = new JSONObject();
+        args.put("request", request);
+        rpc("session/cancel", args);
+    }
+
+    /**
+     * 查账户余额。返回形如 "¥37.54"；失败返回 null。
+     * RPC account/getBalance，参数是 client（不是 request）。
+     */
+    public String getBalance() throws IOException, JSONException {
+        JSONObject client = new JSONObject();
+        client.put("version", "1.0.0");
+        client.put("locale", "zh-CN");
+        client.put("timezoneOffsetSeconds", -28800);
+        JSONObject args = new JSONObject();
+        args.put("client", client);
+
+        JSONObject res = rpc("account/getBalance", args);
+        JSONObject value = res.optJSONObject("value");
+        if (value == null) return null;
+        if (!"ready".equals(value.optString("status", ""))) return null;
+        JSONArray arr = value.optJSONArray("value");
+        if (arr == null || arr.length() == 0) return null;
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject w = arr.optJSONObject(i);
+            if (w == null) continue;
+            String cur = w.optString("currency", "CNY");
+            String bal = w.optString("balance", "0");
+            if (sb.length() > 0) sb.append("  ");
+            sb.append(formatBalance(cur, bal));
+        }
+        JSONArray bonus = value.optJSONArray("bonusWallets");
+        if (bonus != null && bonus.length() > 0) {
+            JSONObject b = bonus.optJSONObject(0);
+            if (b != null) {
+                String bv = b.optString("balance", "0");
+                if (!"0".equals(bv) && !"0.0".equals(bv) && !bv.startsWith("0.0000")) {
+                    sb.append("  + 赠送 ").append(formatBalance(b.optString("currency", "CNY"), bv));
+                }
+            }
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    private static String formatBalance(String currency, String raw) {
+        String symbol = "USD".equals(currency) ? "$" : "¥";
+        try {
+            java.math.BigDecimal d = new java.math.BigDecimal(raw);
+            return symbol + d.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
+        } catch (Exception e) {
+            return symbol + raw;
+        }
+    }
+
     /** 新建一个会话，返回 sessionId。 */
     public String createSession() throws IOException, JSONException {
         JSONObject args = new JSONObject();
@@ -161,7 +229,8 @@ public class DshApi {
         return sid;
     }
 
-    /** 打开 session/follow 流（历史 + 流式）。回调在 WS 读线程。 */    public WsClient openFollow(String sessionId, WsClient.Listener l) throws IOException, JSONException {
+    /** 打开 session/follow 流（历史 + 流式）。回调在 WS 读线程。 */
+    public WsClient openFollow(String sessionId, WsClient.Listener l) throws IOException, JSONException {
         Map<String, String> h = new HashMap<String, String>();
         h.put("Cookie", cookie);
         WsClient ws = new WsClient(host, port, tls, "/api/remote.mux", h);

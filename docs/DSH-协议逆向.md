@@ -317,6 +317,7 @@ POST /api/session/attachment
 - **工具结果全是 `text`**，没有 image 块 → 「渲染工具结果里的图」这件事在协议层面没有数据，做不了
 - 助手回复也不带 image 块
 - 所以「AI 发图给用户」只能靠 **markdown 引用一个手机能访问的 URL**（`![](http://host:port/x.png)`）
+- 客户端侧的具体做法（图放哪、8898 怎么起、体积上限）见 `dsh-mini\PROJECT_INDEX.md` 的「怎么让图在手机上显示」
 
 
 ---

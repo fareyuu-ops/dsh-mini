@@ -31,12 +31,6 @@ import java.io.InputStream;
  */
 public class SettingsActivity extends Activity {
 
-    private static final int C_BG      = 0xFF0F0F12;
-    private static final int C_PANEL   = 0xFF141419;
-    private static final int C_TEXT    = 0xFFE9E9EE;
-    private static final int C_MUTED   = 0xFF8B8B97;
-    private static final int C_ACCENT  = 0xFF4C8DFF;
-    private static final int C_INPUT   = 0xFF1E1E26;
 
     private static final int REQ_AVATAR = 2001;
     private static final int REQ_LIST_BG = 2002;
@@ -44,16 +38,29 @@ public class SettingsActivity extends Activity {
 
     private EditText etUrl, etToken;
     private ImageView ivAvatar;
-    private TextView tvListBg, tvChatBg;
+    private TextView tvListBg, tvChatBg, tvBalance;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        getWindow().setStatusBarColor(C_BG);
-        getWindow().setNavigationBarColor(C_BG);
+        Theme.dark = getSharedPreferences("dshmini", MODE_PRIVATE).getBoolean("dark", true);
+        getWindow().setStatusBarColor(Theme.bg());
+        getWindow().setNavigationBarColor(Theme.bg());
+        try {
+            int flags = getWindow().getDecorView().getSystemUiVisibility();
+            if (Theme.dark) {
+                flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                flags &= ~0x00000010;
+            } else {
+                flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                if (android.os.Build.VERSION.SDK_INT >= 26) flags |= 0x00000010;
+            }
+            getWindow().getDecorView().setSystemUiVisibility(flags);
+        } catch (Throwable ignored) {
+        }
 
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(C_BG);
+        scroll.setBackgroundColor(Theme.bg());
         scroll.setFillViewport(true);
 
         LinearLayout root = new LinearLayout(this);
@@ -66,7 +73,7 @@ public class SettingsActivity extends Activity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(0, dp(8), 0, dp(14));
 
-        TextView back = chip("‹", 0xFF24242D, C_TEXT);
+        TextView back = chip("‹", Theme.chip(), Theme.text());
         back.setTextSize(20);
         back.setPadding(dp(14), dp(2), dp(16), dp(4));
         back.setOnClickListener(new View.OnClickListener() {
@@ -76,7 +83,7 @@ public class SettingsActivity extends Activity {
 
         TextView title = new TextView(this);
         title.setText("设置");
-        title.setTextColor(C_TEXT);
+        title.setTextColor(Theme.text());
         title.setTextSize(19);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         header.addView(title, margin(1f, 12));
@@ -93,7 +100,7 @@ public class SettingsActivity extends Activity {
         etUrl.setText(sp.getString("url", ""));
         etToken.setText(sp.getString("token", ""));
 
-        TextView save = chip("保存连接信息", C_ACCENT, 0xFF0B1B33);
+        TextView save = chip("保存连接信息", Theme.accent(), Theme.onAccent());
         save.setPadding(dp(18), dp(11), dp(18), dp(11));
         save.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -110,18 +117,18 @@ public class SettingsActivity extends Activity {
         root.addView(label("头像"));
         ivAvatar = new ImageView(this);
         ivAvatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        ivAvatar.setBackground(round(0xFF1C2E5A, 28));
+        ivAvatar.setBackground(round(Theme.avatarBg(), 28));
         root.addView(ivAvatar, new LinearLayout.LayoutParams(dp(56), dp(56)));
         refreshAvatarPreview();
 
         LinearLayout avatarRow = new LinearLayout(this);
         avatarRow.setOrientation(LinearLayout.HORIZONTAL);
         avatarRow.setPadding(0, dp(10), 0, 0);
-        TextView pickAvatar = chip("选择图片", 0xFF24242D, C_TEXT);
+        TextView pickAvatar = chip("选择图片", Theme.chip(), Theme.text());
         pickAvatar.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { pick(REQ_AVATAR); }
         });
-        TextView resetAvatar = chip("恢复默认", 0xFF24242D, C_MUTED);
+        TextView resetAvatar = chip("恢复默认", Theme.chip(), Theme.muted());
         resetAvatar.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 prefs().edit().remove("avatar").apply();
@@ -136,12 +143,12 @@ public class SettingsActivity extends Activity {
         root.addView(label("对话列表背景"));
         tvListBg = note();
         root.addView(tvListBg);
-        TextView pickListBg = chip("选择图片", 0xFF24242D, C_TEXT);
+        TextView pickListBg = chip("选择图片", Theme.chip(), Theme.text());
         pickListBg.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { pick(REQ_LIST_BG); }
         });
         root.addView(pickListBg, topMargin(8));
-        TextView resetListBg = chip("恢复默认", 0xFF24242D, C_MUTED);
+        TextView resetListBg = chip("恢复默认", Theme.chip(), Theme.muted());
         resetListBg.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 prefs().edit().remove("listBg").apply();
@@ -153,12 +160,12 @@ public class SettingsActivity extends Activity {
         root.addView(label("聊天背景"));
         tvChatBg = note();
         root.addView(tvChatBg);
-        TextView pickChatBg = chip("选择图片", 0xFF24242D, C_TEXT);
+        TextView pickChatBg = chip("选择图片", Theme.chip(), Theme.text());
         pickChatBg.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { pick(REQ_CHAT_BG); }
         });
         root.addView(pickChatBg, topMargin(8));
-        TextView resetChatBg = chip("恢复默认", 0xFF24242D, C_MUTED);
+        TextView resetChatBg = chip("恢复默认", Theme.chip(), Theme.muted());
         resetChatBg.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 prefs().edit().remove("chatBg").apply();
@@ -167,14 +174,87 @@ public class SettingsActivity extends Activity {
         });
         root.addView(resetChatBg, topMargin(8));
 
+        // ---- 主题 ----
+        root.addView(label("主题"));
+        LinearLayout themeRow = new LinearLayout(this);
+        themeRow.setOrientation(LinearLayout.HORIZONTAL);
+        themeRow.setPadding(0, dp(4), 0, dp(4));
+        String[] themeNames = {"深色", "浅色"};
+        for (int i = 0; i < themeNames.length; i++) {
+            final boolean isDark = (i == 0);
+            boolean selected = (prefs().getBoolean("dark", true) == isDark);
+            TextView c = chip(themeNames[i],
+                    selected ? Theme.accent() : Theme.chip(),
+                    selected ? Theme.onAccent() : Theme.text());
+            c.setTextSize(13);
+            c.setPadding(dp(18), dp(7), dp(18), dp(7));
+            c.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    prefs().edit().putBoolean("dark", isDark).apply();
+                    Theme.dark = isDark;
+                    recreate();   // 设置页自己先换，主界面回来时也会重建
+                }
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            if (i > 0) lp.leftMargin = dp(8);
+            themeRow.addView(c, lp);
+        }
+        root.addView(themeRow);
+
+        // ---- 显示范围 ----
+        root.addView(label("会话列表显示范围"));
+        final int[] rangeDays = {1, 3, 7, 30, 0};
+        final String[] rangeNames = {"1 天", "3 天", "7 天", "30 天", "全部"};
+        final TextView[] rangeChips = new TextView[rangeDays.length];
+        LinearLayout rangeRow = new LinearLayout(this);
+        rangeRow.setOrientation(LinearLayout.HORIZONTAL);
+        rangeRow.setPadding(0, dp(4), 0, dp(4));
+        int savedRange = prefs().getInt("rangeDays", 0);
+        for (int i = 0; i < rangeDays.length; i++) {
+            final int d = rangeDays[i];
+            final TextView c = chip(rangeNames[i], Theme.chip(), Theme.text());
+            c.setTextSize(13);
+            c.setPadding(dp(12), dp(7), dp(12), dp(7));
+            c.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    prefs().edit().putInt("rangeDays", d).apply();
+                    paintRange(rangeChips, rangeDays, d);
+                    toast("已切换，回列表页点刷新即可");
+                }
+            });
+            rangeChips[i] = c;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            if (i > 0) lp.leftMargin = dp(6);
+            rangeRow.addView(c, lp);
+        }
+        paintRange(rangeChips, rangeDays, savedRange);
+        root.addView(rangeRow);
+
+        // ---- 账户 ----
+        root.addView(label("账户余额"));
+        tvBalance = note();
+        tvBalance.setTextSize(16);
+        tvBalance.setTextColor(Theme.text());
+        tvBalance.setText("点下面按钮查询");
+        root.addView(tvBalance);
+
+        TextView btnBal = chip("刷新余额", Theme.chip(), Theme.text());
+        btnBal.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { refreshBalance(); }
+        });
+        root.addView(btnBal, topMargin(8));
+        refreshBalance();
+
         // ---- 关于 ----
         root.addView(label("关于"));
         TextView about = note();
-        about.setText("DSH Mini 0.3\n"
+        about.setText("DSH Mini 0.4\n"
                 + "DeepSeek Harness 的安卓原生极简客户端。\n"
                 + "纯手写 WebSocket / HTTP，无第三方依赖，手工构建（aapt2 + javac + d8）。\n\n"
                 + "协议细节见仓库 docs/DSH-协议逆向.md。\n"
-                + "GitHub: 待填（推送后更新）");
+                + "https://github.com/fareyuu-ops/dsh-mini");
         about.setLineSpacing(dp(3), 1f);
         root.addView(about);
 
@@ -302,11 +382,11 @@ public class SettingsActivity extends Activity {
     private EditText input(String hint) {
         EditText e = new EditText(this);
         e.setHint(hint);
-        e.setHintTextColor(0xFF5A5A66);
-        e.setTextColor(C_TEXT);
+        e.setHintTextColor(Theme.muted());
+        e.setTextColor(Theme.text());
         e.setTextSize(13);
         e.setSingleLine(true);
-        e.setBackground(round(C_INPUT, 12));
+        e.setBackground(round(Theme.input(), 12));
         e.setPadding(dp(12), dp(9), dp(12), dp(9));
         return e;
     }
@@ -314,7 +394,7 @@ public class SettingsActivity extends Activity {
     private TextView label(String s) {
         TextView tv = new TextView(this);
         tv.setText(s);
-        tv.setTextColor(C_TEXT);
+        tv.setTextColor(Theme.text());
         tv.setTextSize(15);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
         tv.setPadding(0, dp(22), 0, dp(8));
@@ -323,7 +403,7 @@ public class SettingsActivity extends Activity {
 
     private TextView note() {
         TextView tv = new TextView(this);
-        tv.setTextColor(C_MUTED);
+        tv.setTextColor(Theme.muted());
         tv.setTextSize(12);
         return tv;
     }
@@ -340,6 +420,49 @@ public class SettingsActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, weight);
         lp.leftMargin = dp(left);
         return lp;
+    }
+
+    /** 查账户余额：用设置里保存的地址 + token 现登录一次。 */
+    private void refreshBalance() {
+        if (tvBalance == null) return;
+        final String url = prefs().getString("url", "");
+        final String token = prefs().getString("token", "");
+        if (TextUtils.isEmpty(url) || TextUtils.isEmpty(token)) {
+            tvBalance.setText("先在上面填好地址和 token");
+            return;
+        }
+        tvBalance.setText("查询中…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    DshApi api = new DshApi(url);
+                    api.login(token);
+                    final String b = api.getBalance();
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            tvBalance.setText(b == null ? "查询失败（账号可能未登录）" : b);
+                        }
+                    });
+                } catch (final Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            tvBalance.setText("失败: " + e.getMessage());
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    /** 显示范围 chip 的选中态：选中的用强调色。 */
+    private void paintRange(TextView[] chips, int[] days, int selected) {
+        if (chips == null) return;
+        for (int i = 0; i < chips.length; i++) {
+            if (chips[i] == null) continue;
+            boolean on = days[i] == selected;
+            chips[i].setBackground(round(on ? Theme.accent() : Theme.chip(), 18));
+            chips[i].setTextColor(on ? Theme.onAccent() : Theme.text());
+        }
     }
 
     private void toast(String s) {
