@@ -379,6 +379,19 @@ public class MainActivity extends Activity {
                 if (!inChat && pos < sessions.size()) openSession(sessions.get(pos));
             }
         });
+        // 长按改名：挂在 ListView 上而不是 item 上——给 item 设 longClick 会消费 DOWN，
+        // 导致 onItemClick 收不到
+        list.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+            @Override public boolean onItemLongClick(AdapterView<?> p, View v, int pos, long id) {
+                if (inChat || pos >= sessions.size()) return false;
+                String s = sessions.get(pos);
+                int nl = s.lastIndexOf('\n');
+                String title = nl >= 0 ? s.substring(0, nl) : s;
+                String sid = nl >= 0 ? s.substring(nl + 1).trim() : s;
+                showRenameDialog(sid, title);
+                return true;
+            }
+        });
 
         // 连上之后连接栏会收起；点状态栏可以再把它叫出来改地址
         tvStatus.setOnClickListener(new View.OnClickListener() {
@@ -696,6 +709,33 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /**
+     * 从电脑上的静态服务拉最新 token。
+     * 电脑端有个脚本盯着 ~\.dsh\dsh-web-url.txt，一变就把 token 写到 share\dsh-token.txt；
+     * 这里按同一台主机的 8898 端口去取，取不到就返回 null（继续用设置里存的）。
+     */
+    private static String fetchSharedToken(String baseUrl) {
+        try {
+            String host = new java.net.URL(baseUrl).getHost();
+            if (host == null || host.length() == 0) return null;
+            java.net.URL u = new java.net.URL("http://" + host + ":8898/dsh-token.txt");
+            java.net.HttpURLConnection c = (java.net.HttpURLConnection) u.openConnection();
+            c.setConnectTimeout(1500);
+            c.setReadTimeout(1500);
+            c.setRequestMethod("GET");
+            if (c.getResponseCode() != 200) return null;
+            java.io.InputStream in = c.getInputStream();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            in.close();
+            return new String(bos.toByteArray(), "UTF-8").trim();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void scrollEnd() {
         if (msgs.isEmpty()) return;
         list.setSelection(msgs.size() - 1);
@@ -713,17 +753,25 @@ public class MainActivity extends Activity {
 
     private void doConnect() {
         final String url = etUrl.getText().toString().trim();
-        final String token = etToken.getText().toString().trim();
+        String token = etToken.getText().toString().trim();
         if (TextUtils.isEmpty(url) || TextUtils.isEmpty(token)) {
             toast("先填地址和 token");
             return;
         }
+        // 电脑上那个同步脚本会把最新 token 写到 8898 的 dsh-token.txt，先拉一把
+        String fresh = fetchSharedToken(url);
+        if (fresh != null && fresh.length() > 20) {
+            token = fresh;
+            etToken.setText(fresh);
+            saveLogin(url, fresh);
+        }
+        final String tokenFinal = token;
         status("连接中…");
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
                     DshApi a = new DshApi(url);
-                    a.login(token);
+                    a.login(tokenFinal);
                     final JSONArray items = a.listSessions();
                     api = a;
                     final java.util.HashMap<String, Long> times = new java.util.HashMap<String, Long>();
@@ -737,7 +785,7 @@ public class MainActivity extends Activity {
                             showSessions();
                             headerConn.setVisibility(View.GONE);
                             if (etUrl.getText().length() == 0) etUrl.setText(api.origin);
-                            saveLogin(url, token);
+                            saveLogin(url, tokenFinal);
                             status("已连接 · " + sessions.size() + " 个会话");
 
                             // 重开时直接回到上次那个会话
@@ -946,27 +994,319 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    /** 聊天页右下角「⋯」的菜单。以后想加功能往这儿添。 */
+    /** 聊天页右上角「⋯」：和选择器同一套面板（系统 PopupMenu 是灰底直角，跟主题不搭）。 */
     private void showChatMenu(View anchor) {
-        android.widget.PopupMenu pm = new android.widget.PopupMenu(this, anchor);
-        pm.getMenu().add("刷新");
-        pm.getMenu().add("复制会话 ID");
-        pm.setOnMenuItemClickListener(new android.widget.PopupMenu.OnMenuItemClickListener() {
-            @Override public boolean onMenuItemClick(android.view.MenuItem item) {
-                String t = String.valueOf(item.getTitle());
-                if ("刷新".equals(t)) {
+        final String[] items = {"切换模型", "思考强度", "刷新", "复制会话 ID"};
+        showChoiceSheet("会话操作", items, -1, new OnChosen() {
+            @Override public void onChosen(int index) {
+                if (index == 0) {
+                    showModelDialog();
+                } else if (index == 1) {
+                    showEffortDialog();
+                } else if (index == 2) {
                     if (inChat && currentSession != null) openSession(currentSession);
                     else refreshSessions();
-                    return true;
-                }
-                if ("复制会话 ID".equals(t)) {
+                } else if (index == 3) {
                     copySessionId();
-                    return true;
                 }
-                return false;
             }
         });
-        pm.show();
+    }
+
+    /** 选择器回调。 */
+    private interface OnChosen { void onChosen(int index); }
+
+    /** 主题化的单选弹窗：圆角、跟随日夜、当前项高亮 + ✓。 */
+    private void showChoiceSheet(String title, String[] labels, int currentIndex, final OnChosen cb) {
+        final android.app.Dialog dlg = new android.app.Dialog(this);
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackground(round(Theme.panel(), 20));
+        box.setPadding(dp(8), dp(18), dp(8), dp(12));
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText(title);
+        tvTitle.setTextColor(Theme.text());
+        tvTitle.setTextSize(16);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setPadding(dp(14), 0, dp(14), dp(10));
+        box.addView(tvTitle);
+
+        for (int i = 0; i < labels.length; i++) {
+            final int idx = i;
+            boolean on = (i == currentIndex);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(14), dp(13), dp(14), dp(13));
+            row.setClickable(true);
+            if (on) row.setBackground(round(Theme.chip(), 12));
+
+            TextView label = new TextView(this);
+            label.setText(labels[i]);
+            label.setTextColor(on ? Theme.accent() : Theme.text());
+            label.setTextSize(15);
+            row.addView(label, new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            if (on) {
+                TextView check = new TextView(this);
+                check.setText("✓");
+                check.setTextColor(Theme.accent());
+                check.setTextSize(15);
+                check.setPadding(dp(8), 0, 0, 0);
+                row.addView(check);
+            }
+
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    dlg.dismiss();
+                    cb.onChosen(idx);
+                }
+            });
+
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rlp.leftMargin = dp(6);
+            rlp.rightMargin = dp(6);
+            rlp.bottomMargin = dp(4);
+            box.addView(row, rlp);
+        }
+
+        dlg.setContentView(box);
+        dlg.show();
+        android.view.Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0));
+            w.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.82f),
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+    }
+
+    /** 当前选中的模型 / 强度（设置里的缓存，首次从服务端默认值来）。 */
+    private String selProvider() { return prefs().getString("selProvider", ""); }
+    private String selModel()    { return prefs().getString("selModel", ""); }
+    private String selEffort()   { return prefs().getString("selEffort", ""); }
+
+    private android.content.SharedPreferences prefs() {
+        return getSharedPreferences("dshmini", MODE_PRIVATE);
+    }
+
+    /** 拉模型目录，列出来让人选。 */
+    private void showModelDialog() {
+        if (currentSession == null || api == null) return;
+        toast("读取模型列表…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    final JSONObject cat = api.modelCatalog();
+                    ui.post(new Runnable() {
+                        @Override public void run() {
+                            final List<String> labels = new ArrayList<String>();
+                            final List<String[]> ids = new ArrayList<String[]>();
+                            org.json.JSONArray groups = cat.optJSONArray("groups");
+                            int current = -1;
+                            if (groups != null) {
+                                for (int i = 0; i < groups.length(); i++) {
+                                    JSONObject g = groups.optJSONObject(i);
+                                    if (g == null) continue;
+                                    String gid = g.optString("id");
+                                    org.json.JSONArray models = g.optJSONArray("models");
+                                    if (models == null) continue;
+                                    for (int j = 0; j < models.length(); j++) {
+                                        JSONObject m = models.optJSONObject(j);
+                                        if (m == null) continue;
+                                        String mid = m.optString("id");
+                                        labels.add(m.optString("name") + "   (" + gid + ")");
+                                        ids.add(new String[]{gid, mid});
+                                        if (gid.equals(selProvider()) && mid.equals(selModel())) {
+                                            current = labels.size() - 1;
+                                        }
+                                    }
+                                }
+                            }
+                            if (labels.isEmpty()) {
+                                toast("没有可用模型");
+                                return;
+                            }
+                            if (current < 0) current = 0;
+                            showChoiceSheet("选择模型", labels.toArray(new String[0]), current,
+                                    new OnChosen() {
+                                        @Override public void onChosen(int index) {
+                                            String[] id = ids.get(index);
+                                            prefs().edit()
+                                                    .putString("selProvider", id[0])
+                                                    .putString("selModel", id[1])
+                                                    .apply();
+                                            doSelectModel(id[0], id[1], selEffort());
+                                        }
+                                    });
+                        }
+                    });
+                } catch (final Exception e) {
+                    ui.post(new Runnable() {
+                        @Override public void run() { toast("读取失败: " + e.getMessage()); }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    /** 思考强度：off / low / high / max。 */
+    private void showEffortDialog() {
+        if (currentSession == null || api == null) return;
+        final String[] ids = {"off", "low", "high", "max"};
+        final String[] names = {"关闭", "低", "高", "最高"};
+        int current = 2;   // 默认 high
+        for (int i = 0; i < ids.length; i++) {
+            if (ids[i].equals(selEffort())) { current = i; break; }
+        }
+        showChoiceSheet("思考强度", names, current, new OnChosen() {
+            @Override public void onChosen(int index) {
+                prefs().edit().putString("selEffort", ids[index]).apply();
+                applyEffort(ids[index], names[index]);
+            }
+        });
+    }
+
+    /** 改强度：沿用当前选的模型；没选过就用服务端默认。 */
+    private void applyEffort(final String effort, final String label) {
+        toast("切换思考强度…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    String p = selProvider();
+                    String m = selModel();
+                    if (p.length() == 0 || m.length() == 0) {
+                        JSONObject cat = api.modelCatalog();
+                        JSONObject def = cat.optJSONObject("default");
+                        if (def == null) throw new java.io.IOException("没有默认模型");
+                        p = def.optString("provider");
+                        m = def.optString("model");
+                        final String fp = p, fm = m;
+                        ui.post(new Runnable() {
+                            @Override public void run() {
+                                prefs().edit().putString("selProvider", fp)
+                                        .putString("selModel", fm).apply();
+                            }
+                        });
+                    }
+                    api.selectModel(currentSession, p, m, effort);
+                    ui.post(new Runnable() {
+                        @Override public void run() { toast("思考强度: " + label); }
+                    });
+                } catch (final Exception e) {
+                    ui.post(new Runnable() {
+                        @Override public void run() { toast("切换失败: " + e.getMessage()); }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void doSelectModel(final String provider, final String model, final String effort) {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    api.selectModel(currentSession, provider, model, effort);
+                    ui.post(new Runnable() {
+                        @Override public void run() { toast("已切换模型"); }
+                    });
+                } catch (final Exception e) {
+                    ui.post(new Runnable() {
+                        @Override public void run() { toast("切换失败: " + e.getMessage()); }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    /** 长按会话改名（自定义弹窗，跟主题一致）。 */
+    private void showRenameDialog(final String sid, String oldTitle) {
+        final android.app.Dialog dlg = new android.app.Dialog(this);
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackground(round(Theme.panel(), 20));
+        box.setPadding(dp(20), dp(20), dp(20), dp(14));
+
+        TextView title = new TextView(this);
+        title.setText("重命名");
+        title.setTextColor(Theme.text());
+        title.setTextSize(16);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(title);
+
+        final EditText et = new EditText(this);
+        et.setText(oldTitle);
+        et.setSelection(oldTitle.length());
+        et.setTextColor(Theme.text());
+        et.setHintTextColor(Theme.muted());
+        et.setBackground(round(Theme.input(), 12));
+        et.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        elp.topMargin = dp(14);
+        box.addView(et, elp);
+
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(Gravity.END);
+
+        TextView cancel = chip("取消", Theme.chip(), Theme.muted());
+        cancel.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { dlg.dismiss(); }
+        });
+        TextView ok = chip("确定", Theme.accent(), Theme.onAccent());
+        ok.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                final String t = et.getText().toString().trim();
+                if (t.length() == 0) return;
+                dlg.dismiss();
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        try {
+                            api.rename(sid, t);
+                            ui.post(new Runnable() {
+                                @Override public void run() {
+                                    toast("已改名");
+                                    refreshSessions();
+                                }
+                            });
+                        } catch (final Exception e) {
+                            ui.post(new Runnable() {
+                                @Override public void run() {
+                                    toast("改名失败: " + e.getMessage());
+                                }
+                            });
+                        }
+                    }
+                }).start();
+            }
+        });
+
+        LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp1.rightMargin = dp(8);
+        btnRow.addView(cancel, lp1);
+        btnRow.addView(ok);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowLp.topMargin = dp(10);
+        box.addView(btnRow, rowLp);
+
+        dlg.setContentView(box);
+        dlg.show();
+        android.view.Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0));
+            w.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.82f),
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
     }
 
     private void copySessionId() {

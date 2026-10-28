@@ -217,6 +217,37 @@ public class DshApi {
         }
     }
 
+    /** 改会话标题。RPC session/rename，参数 {sessionId, title}。 */
+    public void rename(String sessionId, String title) throws IOException, JSONException {
+        JSONObject req = new JSONObject();
+        req.put("sessionId", sessionId);
+        req.put("title", title);
+        JSONObject args = new JSONObject();
+        args.put("request", req);
+        rpc("session/rename", args);
+    }
+
+    /** 模型目录（可用模型 + 各家支持的思考强度）。参数为空。 */
+    public JSONObject modelCatalog() throws IOException, JSONException {
+        JSONObject res = rpc("session/modelCatalog", new JSONObject());
+        JSONObject value = res.optJSONObject("value");
+        if (value == null) throw new IOException("modelCatalog: no value");
+        return value;
+    }
+
+    /** 切模型 / 思考强度。RPC session/selectModel。 */
+    public void selectModel(String sessionId, String provider, String model, String effort)
+            throws IOException, JSONException {
+        JSONObject req = new JSONObject();
+        req.put("sessionId", sessionId);
+        req.put("provider", provider);
+        req.put("model", model);
+        if (effort != null && effort.length() > 0) req.put("reasoningEffort", effort);
+        JSONObject args = new JSONObject();
+        args.put("request", req);
+        rpc("session/selectModel", args);
+    }
+
     /** 新建一个会话，返回 sessionId。 */
     public String createSession() throws IOException, JSONException {
         JSONObject args = new JSONObject();
