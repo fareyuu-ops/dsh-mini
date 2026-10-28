@@ -22,6 +22,72 @@ DeepSeek Harness 的**安卓原生极简客户端**。不做 WebView 套壳，�
 - 会话列表按时间过滤（1/3/7/30 天 / 全部）
 - 切后台自动断、回前台自动重连；记住地址 / token / 上次会话 / 主题
 
+## 适用范围
+
+dsh-mini 是 DSH 的**客户端**：它自己不跑模型、不连 DeepSeek 的服务器，只跟你自己的
+DSH 实例通信。
+
+**能用**：
+
+- DSH 跑在同一局域网的电脑上，手机连同一个 Wi-Fi
+- DSH 跑在服务器上，**手机能直接访问到它的 HTTP 端口**（默认 19387）
+
+**目前不支持**：
+
+- **HTTPS / 反向代理 / 域名** —— dsh-mini 只走 `http://` + `ws://`。而且 DSH 有 Host 校验，
+  用域名访问会被 403（需要让 DSH 信任那个 Host，见下文「Tailscale」）
+- 客户端主动穿透 NAT —— 内网里的 DSH，手机在外网连不上，需要你自己搭 Tailscale / frp 之类
+
+**一句话判断能不能用**：手机浏览器打开 `http://<地址>:19387` 能看到 DSH 的页面，dsh-mini 就能连。
+
+## 怎么拿到地址和 token
+
+DSH 启动后会把连接信息写到：
+
+- Windows：`%USERPROFILE%\.dsh\dsh-web-url.txt`
+- macOS / Linux：`~/.dsh/dsh-web-url.txt`
+
+里面长这样：
+
+```json
+{
+  "loopback": "http://127.0.0.1:19387/?token=xxxxxxxx",
+  "lan": [
+    "http://192.168.1.2:19387/?token=xxxxxxxx"
+  ],
+  "port": 19387
+}
+```
+
+- **地址**：填 `lan` 里那条（手机能访问到的 IP），比如 `http://192.168.1.2:19387`
+  - `loopback` 里的 `127.0.0.1` **手机访问不到**，别填这个
+- **token**：URL 里 `token=` 后面那串（43 位）
+- **重要**：DSH 每次重启都会生成新 token，旧的立刻失效
+
+### 自动同步 token（可选，省事）
+
+电脑上跑一个脚本盯着 `dsh-web-url.txt`，一变就把 token 写到能被手机访问的地方：
+
+```powershell
+# dsh-mini\sync-token.ps1 每 3 秒检查一次，把 token 写到
+# D:\whale home\手机相册工具\share\dsh-token.txt
+pwsh -NoProfile -WindowStyle Hidden -File "D:\whale home\dsh-mini\sync-token.ps1"
+```
+
+再用任意静态服务把它暴露出来（例如 `python -m http.server 8898 --directory <那个目录>`），
+dsh-mini 点「连接」时会先 `GET http://<同一台主机>:8898/dsh-token.txt`，
+**拿到就用新的**，拿不到才用设置里存的。
+
+### Tailscale / 远程访问
+
+想让手机在外网连家里的 DSH，可以用 Tailscale，但要注意 DSH 的 **Host 校验**：
+
+- 通过 Tailscale 的 MagicDNS 名字（如 `http://node.xxx.ts.net:19387`）访问会被 **403**
+- 需要让 DSH 信任这个 Host（启动参数 `--trusted-host`，或让它以该 Host 启动），
+  目前 dsh-mini 这边没有绕过办法
+
+（这是实测卡住的地方，欢迎有解法的人提 PR。）
+
 ## 构建
 
 需要 Android SDK（platform-tools / platforms;android-34 / build-tools;34.0.0）和 JDK 17：
