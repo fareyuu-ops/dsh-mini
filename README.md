@@ -80,13 +80,22 @@ dsh-mini 点「连接」时会先 `GET http://<同一台主机>:8898/dsh-token.t
 
 ### Tailscale / 远程访问
 
-想让手机在外网连家里的 DSH，可以用 Tailscale，但要注意 DSH 的 **Host 校验**：
+可以用，而且局域网和远程能共用同一个地址。关键只有一条配置：
 
-- 通过 Tailscale 的 MagicDNS 名字（如 `http://node.xxx.ts.net:19387`）访问会被 **403**
-- 需要让 DSH 信任这个 Host（启动参数 `--trusted-host`，或让它以该 Host 启动），
-  目前 dsh-mini 这边没有绕过办法
+```yaml
+# ~/.dsh/profiles/desktop/cordis.patch.yml
+- id: connection
+  name: "@deepseek-ai/dsh-client-connection"
+  inject: [ webStartup ]
+  config:
+    trustedHosts: [ "node.xxx.ts.net" ]
+```
 
-（这是实测卡住的地方，欢迎有解法的人提 PR。）
+注意 **`id` 必须是 `connection`**（不是 `webserver`，也不是包名 `client-connection`），
+写错会静默失效、WS 握手继续 403。
+
+一键脚本见 [`setup.ps1`](setup.ps1)（自动读 token、补配置、起服务、建自启），
+完整步骤和排错见 [`REMOTE.md`](REMOTE.md)。
 
 ## 构建
 
