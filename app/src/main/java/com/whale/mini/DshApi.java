@@ -248,16 +248,82 @@ public class DshApi {
         rpc("session/selectModel", args);
     }
 
-    /** 新建一个会话，返回 sessionId。 */
-    public String createSession() throws IOException, JSONException {
+    /** 新建会话；workspaceId 非空时落进指定工作区（不传就落进「未分组」）。 */
+    public String createSession(String workspaceId) throws IOException, JSONException {
+        JSONObject req = new JSONObject();
+        if (workspaceId != null && workspaceId.length() > 0) {
+            req.put("workspaceId", workspaceId);
+        }
         JSONObject args = new JSONObject();
-        args.put("request", new JSONObject());
+        args.put("request", req);
         JSONObject res = rpc("session/create", args);
         JSONObject value = res.optJSONObject("value");
         if (value == null) throw new IOException("create: no value");
         String sid = value.optString("sessionId", "");
         if (sid.length() == 0) throw new IOException("create: no sessionId");
         return sid;
+    }
+
+    public String createSession() throws IOException, JSONException {
+        return createSession(null);
+    }
+
+    /** 归档会话。RPC workspace/archiveSession，返回全部已归档的 sessionId。 */
+    public void archiveSession(String sessionId) throws IOException, JSONException {
+        JSONObject req = new JSONObject();
+        req.put("sessionId", sessionId);
+        JSONObject args = new JSONObject();
+        args.put("request", req);
+        rpc("workspace/archiveSession", args);
+    }
+
+    /**
+     * 拉工作区基线（workspace/follow 是 stream，这里连一次拿 baseline 就关）。
+     * 返回 {items:[{workspaceId,path,title,sessionIds[]}], archivedSessionIds[], pinnedSessionIds[]}
+     */
+    public JSONObject fetchWorkspaces() throws IOException, JSONException {
+        final JSONObject[] found = new JSONObject[1];
+        final java.util.concurrent.CountDownLatch done =
+                new java.util.concurrent.CountDownLatch(1);
+        Map<String, String> h = new HashMap<String, String>();
+        h.put("Cookie", cookie);
+        WsClient ws = new WsClient(host, port, tls, "/api/remote.mux", h);
+        ws.connect(new WsClient.Listener() {
+            @Override public void onOpen() {
+            }
+
+            @Override public void onText(String text) {
+                if (found[0] != null) return;
+                try {
+                    JSONObject o = new JSONObject(text);
+                    if (!"item".equals(o.optString("type"))) return;
+                    JSONObject v = o.optJSONObject("value");
+                    if (v == null || !"baseline".equals(v.optString("type"))) return;
+                    JSONObject value = v.optJSONObject("value");
+                    if (value != null) {
+                        found[0] = value;
+                        done.countDown();
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
+            @Override public void onClose(int code, String reason) {
+                done.countDown();
+            }
+
+            @Override public void onError(Exception e) {
+                done.countDown();
+            }
+        });
+        ws.sendText(wsOpen("w1", "workspace/follow", new JSONObject()));
+        try {
+            done.await(8, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        try { ws.close(); } catch (Exception ignored) {}
+        if (found[0] == null) throw new IOException("workspace/follow: 没拿到 baseline");
+        return found[0];
     }
 
     /** 打开 session/follow 流（历史 + 流式）。回调在 WS 读线程。 */

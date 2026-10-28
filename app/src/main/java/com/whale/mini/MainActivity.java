@@ -12,6 +12,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
@@ -49,6 +50,9 @@ public class MainActivity extends Activity {
     private TextView tvStatus, tvTitle, fabMenu;
     private ImageView ivAvatar, btnBack;
     private LinearLayout headerConn, chatHeader, headerBrand, bottomNew, bottomChat, pendingStrip;
+    private TextView tvBrandTitle;
+    /** 当前筛选的工作区（null = 全部）。 */
+    private String currentWs;
     private android.widget.HorizontalScrollView pendingScroll;
     private android.graphics.drawable.Drawable listBgDrawable, chatBgDrawable;
 
@@ -138,6 +142,9 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         Theme.dark = getSharedPreferences("dshmini", MODE_PRIVATE).getBoolean("dark", true);
         appliedDark = Theme.dark;
+        // 上次选的工作区（"__ALL__" 表示全部）
+        String savedWs = getSharedPreferences("dshmini", MODE_PRIVATE).getString("currentWs", "__ALL__");
+        currentWs = "__ALL__".equals(savedWs) ? null : savedWs;
         getWindow().setStatusBarColor(Theme.bg());
         getWindow().setNavigationBarColor(Theme.bg());
         applySystemBarIcons();
@@ -202,12 +209,18 @@ public class MainActivity extends Activity {
         ivAvatar.setClipToOutline(true);   // 46dp 方 + 23dp 圆角 → 正圆
         headerBrand.addView(ivAvatar, new LinearLayout.LayoutParams(dp(46), dp(46)));
 
-        TextView brand = new TextView(this);
-        brand.setText("DSH Mini");
-        brand.setTextColor(Theme.text());
-        brand.setTextSize(19);
-        brand.setTypeface(Typeface.DEFAULT_BOLD);
-        headerBrand.addView(brand, withLeftMargin(1f, 12));
+        // 顶栏标题 = 当前工作区，点一下切换
+        tvBrandTitle = new TextView(this);
+        tvBrandTitle.setText("DSH Mini");
+        tvBrandTitle.setTextColor(Theme.text());
+        tvBrandTitle.setTextSize(19);
+        tvBrandTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvBrandTitle.setSingleLine(true);
+        tvBrandTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        tvBrandTitle.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showWorkspacePicker(); }
+        });
+        headerBrand.addView(tvBrandTitle, withLeftMargin(1f, 12));
 
         TextView btnGear = chip("⚙", Theme.chip(), Theme.text());
         btnGear.setTextSize(17);
@@ -326,6 +339,18 @@ public class MainActivity extends Activity {
             @Override
             public View getView(int pos, View cv, ViewGroup parent) {
                 String s = sessions.get(pos);
+
+                // 组标题行：工作区名
+                if (s.startsWith(GROUP_MARK)) {
+                    TextView head = new TextView(MainActivity.this);
+                    head.setText(s.substring(GROUP_MARK.length()));
+                    head.setTextColor(Theme.muted());
+                    head.setTextSize(12);
+                    head.setTypeface(Typeface.DEFAULT_BOLD);
+                    head.setPadding(dp(16), dp(14), dp(16), dp(6));
+                    return head;
+                }
+
                 int nl = s.lastIndexOf('\n');
                 String title = nl >= 0 ? s.substring(0, nl) : s;
                 String sid = nl >= 0 ? s.substring(nl + 1).trim() : s;
@@ -349,7 +374,17 @@ public class MainActivity extends Activity {
 
                 row.addView(t, withLeftMargin(1f, 0));
                 row.addView(ago);
-                return row;
+
+                final String rowSid = sid;
+                final String rowTitle = title;
+                row.setOnLongClickListener(new View.OnLongClickListener() {
+                    @Override public boolean onLongClick(View v) {
+                        showRenameDialog(rowSid, rowTitle);
+                        return true;
+                    }
+                });
+                // 左滑露出「重命名 / 归档」
+                return new SwipeRow(row, swipeActions(rowSid, rowTitle), dp(144));
             }
         };
         msgAdapter = new MsgAdapter();
@@ -376,7 +411,9 @@ public class MainActivity extends Activity {
         });
         list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override public void onItemClick(AdapterView<?> p, View v, int pos, long id) {
-                if (!inChat && pos < sessions.size()) openSession(sessions.get(pos));
+                if (pos >= sessions.size()) return;
+                if (sessions.get(pos).startsWith(GROUP_MARK)) return;   // 组标题不响应
+                if (!inChat) openSession(sessions.get(pos));
             }
         });
         // 长按改名：挂在 ListView 上而不是 item 上——给 item 设 longClick 会消费 DOWN，
@@ -385,6 +422,7 @@ public class MainActivity extends Activity {
             @Override public boolean onItemLongClick(AdapterView<?> p, View v, int pos, long id) {
                 if (inChat || pos >= sessions.size()) return false;
                 String s = sessions.get(pos);
+                if (s.startsWith(GROUP_MARK)) return false;
                 int nl = s.lastIndexOf('\n');
                 String title = nl >= 0 ? s.substring(0, nl) : s;
                 String sid = nl >= 0 ? s.substring(nl + 1).trim() : s;
@@ -736,6 +774,265 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 顶栏点开：选工作区（全部 / 各工作区 / 未分组），当前项打勾。 */
+    private void showWorkspacePicker() {
+        final List<String> labels = new ArrayList<String>();
+        final List<String> ids = new ArrayList<String>();
+        labels.add("全部工作区");
+        ids.add(null);
+
+        if (workspaces != null) {
+            org.json.JSONArray items = workspaces.optJSONArray("items");
+            if (items != null) {
+                for (int i = 0; i < items.length(); i++) {
+                    JSONObject w = items.optJSONObject(i);
+                    if (w == null) continue;
+                    String wid = w.optString("workspaceId");
+                    String wt = w.optString("title", "");
+                    if (wt.length() == 0) {
+                        // 没有 title 就用路径最后一段
+                        String p = w.optString("path", "工作区").replace('\\', '/');
+                        int slash = p.lastIndexOf('/');
+                        wt = slash >= 0 ? p.substring(slash + 1) : p;
+                    }
+                    labels.add(wt);   // 只显示名字，不显示完整路径
+                    ids.add(wid);
+                }
+            }
+        }
+        labels.add("未分组");
+        ids.add("");
+
+        int current = 0;
+        for (int i = 0; i < ids.size(); i++) {
+            String id = ids.get(i);
+            if (currentWs == null) {
+                if (i == 0) { current = 0; break; }
+            } else if (currentWs.equals(id)) {
+                current = i;
+                break;
+            }
+        }
+
+        showChoiceSheet("选择工作区", labels.toArray(new String[0]), current, new OnChosen() {
+            @Override public void onChosen(int index) {
+                currentWs = ids.get(index);
+                prefs().edit().putString("currentWs",
+                        currentWs == null ? "__ALL__" : currentWs).apply();
+                updateBrandTitle();
+                refreshSessions();
+            }
+        });
+    }
+
+    private void updateBrandTitle() {
+        if (tvBrandTitle == null) return;
+        if (currentWs == null) {
+            tvBrandTitle.setText("全部工作区");
+            return;
+        }
+        if (currentWs.length() == 0) {
+            tvBrandTitle.setText("未分组");
+            return;
+        }
+        String name = null;
+        if (workspaces != null) {
+            org.json.JSONArray items = workspaces.optJSONArray("items");
+            if (items != null) {
+                for (int i = 0; i < items.length(); i++) {
+                    JSONObject w = items.optJSONObject(i);
+                    if (w != null && currentWs.equals(w.optString("workspaceId"))) {
+                        name = w.optString("title", w.optString("path"));
+                        break;
+                    }
+                }
+            }
+        }
+        tvBrandTitle.setText(name == null ? "工作区" : name);
+    }
+
+    /** 工作区基线（workspace/follow 的 baseline），连上后拉一次。 */
+    private JSONObject workspaces;
+
+    /** 新对话该进哪个工作区：当前会话所在的那个，否则第一个。 */
+    private String currentWorkspaceId() {
+        if (workspaces == null) return null;
+        JSONArray items = workspaces.optJSONArray("items");
+        if (items == null || items.length() == 0) return null;
+        if (currentSession != null) {
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject w = items.optJSONObject(i);
+                if (w == null) continue;
+                JSONArray sids = w.optJSONArray("sessionIds");
+                if (sids == null) continue;
+                for (int j = 0; j < sids.length(); j++) {
+                    if (currentSession.equals(sids.optString(j))) {
+                        return w.optString("workspaceId");
+                    }
+                }
+            }
+        }
+        JSONObject first = items.optJSONObject(0);
+        return first == null ? null : first.optString("workspaceId");
+    }
+
+    /** 后台拉工作区，成功后存起来（不阻塞 UI）。 */
+    private void loadWorkspaces() {
+        if (api == null) return;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    final JSONObject ws = api.fetchWorkspaces();
+                    ui.post(new Runnable() {
+                        @Override public void run() {
+                            workspaces = ws;
+                            updateBrandTitle();
+                            // 缓存归档列表：下次开 App 时工作区还没拉到，先用它过滤
+                            org.json.JSONArray arch = ws.optJSONArray("archivedSessionIds");
+                            StringBuilder sb = new StringBuilder();
+                            if (arch != null) {
+                                for (int i = 0; i < arch.length(); i++) {
+                                    if (sb.length() > 0) sb.append(',');
+                                    sb.append(arch.optString(i));
+                                }
+                            }
+                            prefs().edit().putString("archivedIds", sb.toString()).apply();
+                        }
+                    });
+                } catch (Exception ignored) {
+                }
+            }
+        }).start();
+    }
+
+    /**
+     * 左滑露出操作按钮的行。
+     * 只在水平位移明显大于垂直位移时拦截，避免抢走 ListView 的竖向滚动。
+     */
+    private class SwipeRow extends FrameLayout {
+        private final View content;
+        private final View actions;
+        private final int panelW;
+        private final int slop;
+        private float downX, downY, startTx;
+        private boolean dragging;
+
+        SwipeRow(View content, View actions, int panelW) {
+            super(MainActivity.this);
+            this.content = content;
+            this.actions = actions;
+            this.panelW = panelW;
+            this.slop = android.view.ViewConfiguration.get(MainActivity.this).getScaledTouchSlop();
+            // 行是透明的（列表有背景图），按钮层不藏起来就会从行底下透出来
+            actions.setVisibility(View.INVISIBLE);
+            addView(actions, new LayoutParams(panelW, ViewGroup.LayoutParams.MATCH_PARENT,
+                    Gravity.END));
+            addView(content, new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+
+        private void showActions(boolean show) {
+            actions.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent e) {
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_DOWN) {
+                downX = e.getX();
+                downY = e.getY();
+                startTx = content.getTranslationX();
+                dragging = false;
+            } else if (a == MotionEvent.ACTION_MOVE) {
+                float dx = e.getX() - downX;
+                float dy = e.getY() - downY;
+                if (Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f) {
+                    dragging = true;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_MOVE) {
+                float tx = startTx + (e.getX() - downX);
+                if (tx > 0) tx = 0;
+                if (tx < -panelW) tx = -panelW;
+                content.setTranslationX(tx);
+                showActions(tx < 0);
+                return true;
+            }
+            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                float tx = content.getTranslationX();
+                final boolean open = tx < -panelW / 2f;
+                content.animate().translationX(open ? -panelW : 0)
+                        .setDuration(150).start();
+                showActions(open);
+                return true;
+            }
+            return true;
+        }
+    }
+
+    /** 这一行的操作按钮（重命名 / 归档）。 */
+    private LinearLayout swipeActions(final String sid, final String title) {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+
+        TextView rename = new TextView(this);
+        rename.setText("重命名");
+        rename.setTextColor(Theme.text());
+        rename.setTextSize(13);
+        rename.setGravity(Gravity.CENTER);
+        rename.setBackgroundColor(Theme.chip());
+        rename.setClickable(true);
+        rename.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showRenameDialog(sid, title); }
+        });
+
+        TextView archive = new TextView(this);
+        archive.setText("归档");
+        archive.setTextColor(0xFFFFFFFF);
+        archive.setTextSize(13);
+        archive.setGravity(Gravity.CENTER);
+        archive.setBackgroundColor(0xFF8A4B4B);
+        archive.setClickable(true);
+        archive.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { doArchive(sid); }
+        });
+
+        bar.addView(rename, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        bar.addView(archive, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        return bar;
+    }
+
+    /** 归档一个会话（workspace/archiveSession）。 */
+    private void doArchive(final String sid) {
+        if (api == null) return;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    api.archiveSession(sid);
+                    ui.post(new Runnable() {
+                        @Override public void run() {
+                            toast("已归档");
+                            refreshSessions();
+                        }
+                    });
+                } catch (final Exception e) {
+                    ui.post(new Runnable() {
+                        @Override public void run() { toast("归档失败: " + e.getMessage()); }
+                    });
+                }
+            }
+        }).start();
+    }
+
     private void scrollEnd() {
         if (msgs.isEmpty()) return;
         list.setSelection(msgs.size() - 1);
@@ -787,6 +1084,7 @@ public class MainActivity extends Activity {
                             if (etUrl.getText().length() == 0) etUrl.setText(api.origin);
                             saveLogin(url, tokenFinal);
                             status("已连接 · " + sessions.size() + " 个会话");
+                            loadWorkspaces();   // 拿工作区，新对话才知道往哪儿放
 
                             // 重开时直接回到上次那个会话
                             String last = lastSession();
@@ -847,7 +1145,9 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    final String sid = api.createSession();
+                    // 落进工作区：优先用当前会话所在的那个，否则第一个
+                    String wsId = currentWorkspaceId();
+                    final String sid = api.createSession(wsId);
                     final JSONArray items = api.listSessions();
                     final java.util.HashMap<String, Long> times = new java.util.HashMap<String, Long>();
                     final List<String> names = parseNames(items, times);
@@ -1335,29 +1635,93 @@ public class MainActivity extends Activity {
     }
 
     /** 把 session/list 的结果转成列表行（标题\n sid），顺带收集 updatedAt。 */
+    /** 组标题行的前缀（和普通会话行区分开）。 */
+    private static final String GROUP_MARK = "\u0002";
+
+    /**
+     * 按工作区分组构建列表。
+     * 元素两种：GROUP_MARK+工作区名（组标题）、title\tsid（会话）。
+     */
     private List<String> parseNames(JSONArray items, java.util.HashMap<String, Long> times) {
-        List<String> names = new ArrayList<String>();
-        if (items == null) return names;
-        int rangeDays = getSharedPreferences("dshmini", MODE_PRIVATE).getInt("rangeDays", 0);
+        List<String> out = new ArrayList<String>();
+        if (items == null) return out;
+        int rangeDays = prefs().getInt("rangeDays", 0);
         long cutoff = rangeDays > 0
                 ? System.currentTimeMillis() - rangeDays * 86400000L : 0L;
+
+        // sessionId -> workspaceId / 工作区标题
+        java.util.HashMap<String, String> sidToWs = new java.util.HashMap<String, String>();
+        java.util.HashMap<String, String> wsTitle = new java.util.HashMap<String, String>();
+        java.util.HashSet<String> archived = new java.util.HashSet<String>();
+        if (workspaces != null) {
+            org.json.JSONArray arch = workspaces.optJSONArray("archivedSessionIds");
+            if (arch != null) {
+                for (int i = 0; i < arch.length(); i++) archived.add(arch.optString(i));
+            }
+        }
+        if (archived.isEmpty()) {
+            // 还没拉到工作区（刚开 App）：用上次缓存的归档列表
+            String cached = prefs().getString("archivedIds", "");
+            if (cached.length() > 0) {
+                for (String x : cached.split(",")) {
+                    if (x.length() > 0) archived.add(x);
+                }
+            }
+        }
+        if (workspaces != null) {
+            JSONArray ws = workspaces.optJSONArray("items");
+            if (ws != null) {
+                for (int i = 0; i < ws.length(); i++) {
+                    JSONObject w = ws.optJSONObject(i);
+                    if (w == null) continue;
+                    String wid = w.optString("workspaceId");
+                    String wt = w.optString("title", w.optString("path", "工作区"));
+                    wsTitle.put(wid, wt);
+                    JSONArray sids = w.optJSONArray("sessionIds");
+                    if (sids != null) {
+                        for (int j = 0; j < sids.length(); j++) {
+                            sidToWs.put(sids.optString(j), wid);
+                        }
+                    }
+                }
+            }
+        }
+
+        java.util.LinkedHashMap<String, List<String>> buckets =
+                new java.util.LinkedHashMap<String, List<String>>();
         for (int i = 0; i < items.length(); i++) {
             JSONObject it = items.optJSONObject(i);
             if (it == null) continue;
-            if (it.optBoolean("blank")) continue;   // 空会话不进列表（桌面端也这样）
+            if (it.optBoolean("blank")) continue;   // 空对话不进列表
             long updatedAt = it.optLong("updatedAt", 0);
-            if (cutoff > 0 && updatedAt > 0 && updatedAt < cutoff) continue;   // 超出显示范围
+            if (cutoff > 0 && updatedAt > 0 && updatedAt < cutoff) continue;
             String sid = it.optString("sessionId");
+            if (archived.contains(sid)) continue;   // 归档的默认隐藏
+            String wid = sidToWs.get(sid);
+            if (wid == null) wid = "";              // 空字符串 = 未分组
+            if (currentWs != null && !currentWs.equals(wid)) continue;
             String title = "";
             JSONObject proj = it.optJSONObject("projections");
             if (proj != null) {
                 JSONObject vals = proj.optJSONObject("values");
                 if (vals != null) title = vals.optString("title", "");
             }
-            names.add(cleanTitle(title) + "\n" + sid);
+            List<String> bucket = buckets.get(wid);
+            if (bucket == null) {
+                bucket = new ArrayList<String>();
+                buckets.put(wid, bucket);
+            }
+            bucket.add(cleanTitle(title) + "\n" + sid);
             if (times != null) times.put(sid, updatedAt);
         }
-        return names;
+
+        for (String wid : buckets.keySet()) {
+            String wt = wid.length() == 0
+                    ? "未分组" : wsTitle.containsKey(wid) ? wsTitle.get(wid) : "工作区";
+            out.add(GROUP_MARK + wt);
+            out.addAll(buckets.get(wid));
+        }
+        return out;
     }
 
     /** 服务端空标题会给字符串 "null"，这里统一收口。 */
