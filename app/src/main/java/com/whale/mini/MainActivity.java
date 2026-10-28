@@ -222,13 +222,18 @@ public class MainActivity extends Activity {
         });
         headerBrand.addView(tvBrandTitle, withLeftMargin(1f, 12));
 
-        TextView btnGear = chip("⚙", Theme.chip(), Theme.text());
-        btnGear.setTextSize(17);
-        btnGear.setPadding(dp(12), dp(2), dp(12), dp(4));
-        btnGear.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { openSettings(); }
+        // 顶部右侧：新建对话（和设置对调了，设置沉到底部，以后底部好加东西）
+        ImageView btnNewTop = new ImageView(this);
+        btnNewTop.setImageResource(R.drawable.ic_new_chat);
+        btnNewTop.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        btnNewTop.setImageTintList(android.content.res.ColorStateList.valueOf(Theme.onAccent()));
+        btnNewTop.setBackground(round(Theme.accent(), 20));
+        btnNewTop.setPadding(dp(11), dp(11), dp(11), dp(11));
+        btnNewTop.setClickable(true);
+        btnNewTop.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { newSession(); }
         });
-        headerBrand.addView(btnGear);
+        headerBrand.addView(btnNewTop, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         // ---- 底部：列表页的「新建对话」 ----
         bottomNew = new LinearLayout(this);
@@ -237,13 +242,18 @@ public class MainActivity extends Activity {
         bottomNew.setPadding(dp(10), dp(10), dp(10), dp(12));
         bottomNew.setBackgroundColor(Theme.panel());
 
-        TextView btnNew = chip("＋  新建对话", Theme.accent(), Theme.onAccent());
-        btnNew.setTextSize(15);
-        btnNew.setPadding(dp(20), dp(12), dp(20), dp(12));
-        btnNew.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { newSession(); }
+        // 底部：设置（齿轮，沉在这里，以后还能往下加别的入口）
+        ImageView btnSettings = new ImageView(this);
+        btnSettings.setImageResource(R.drawable.ic_settings);
+        btnSettings.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        btnSettings.setImageTintList(android.content.res.ColorStateList.valueOf(Theme.text()));
+        btnSettings.setBackground(round(Theme.chip(), 20));
+        btnSettings.setPadding(dp(10), dp(10), dp(10), dp(10));
+        btnSettings.setClickable(true);
+        btnSettings.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openSettings(); }
         });
-        bottomNew.addView(btnNew);
+        bottomNew.addView(btnSettings, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         // 返回键用矢量箭头而不是 ‹：引号类字符字形偏左，文字居中永远差一点
         btnBack = new ImageView(this);
@@ -374,17 +384,7 @@ public class MainActivity extends Activity {
 
                 row.addView(t, withLeftMargin(1f, 0));
                 row.addView(ago);
-
-                final String rowSid = sid;
-                final String rowTitle = title;
-                row.setOnLongClickListener(new View.OnLongClickListener() {
-                    @Override public boolean onLongClick(View v) {
-                        showRenameDialog(rowSid, rowTitle);
-                        return true;
-                    }
-                });
-                // 左滑露出「重命名 / 归档」
-                return new SwipeRow(row, swipeActions(rowSid, rowTitle), dp(144));
+                return row;
             }
         };
         msgAdapter = new MsgAdapter();
@@ -416,17 +416,51 @@ public class MainActivity extends Activity {
                 if (!inChat) openSession(sessions.get(pos));
             }
         });
-        // 长按改名：挂在 ListView 上而不是 item 上——给 item 设 longClick 会消费 DOWN，
-        // 导致 onItemClick 收不到
+        // 下拉刷新：在列表顶部往下拖，列表跟着走，松手回弹
+        list.setOnTouchListener(new View.OnTouchListener() {
+            private float downY;
+            private boolean pulled;
+
+            @Override public boolean onTouch(View v, MotionEvent e) {
+                int a = e.getActionMasked();
+                if (a == MotionEvent.ACTION_DOWN) {
+                    downY = e.getY();
+                    pulled = false;
+                } else if (a == MotionEvent.ACTION_MOVE) {
+                    float dy = e.getY() - downY;
+                    if (dy > 0 && !list.canScrollVertically(-1)) {
+                        list.setTranslationY(Math.min(dy * 0.4f, dp(140)));
+                        if (dy > dp(90)) pulled = true;
+                    } else if (dy <= 0) {
+                        list.setTranslationY(0);
+                    }
+                } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                    list.animate().translationY(0).setDuration(200).start();
+                    if (pulled && !inChat && api != null) {
+                        status("刷新中…");
+                        refreshSessions();
+                    }
+                    pulled = false;
+                }
+                return false;
+            }
+        });
+
+        // 长按弹操作菜单（重命名 / 归档）；挂在 ListView 上，不给 item 设监听
         list.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
             @Override public boolean onItemLongClick(AdapterView<?> p, View v, int pos, long id) {
                 if (inChat || pos >= sessions.size()) return false;
                 String s = sessions.get(pos);
                 if (s.startsWith(GROUP_MARK)) return false;
                 int nl = s.lastIndexOf('\n');
-                String title = nl >= 0 ? s.substring(0, nl) : s;
-                String sid = nl >= 0 ? s.substring(nl + 1).trim() : s;
-                showRenameDialog(sid, title);
+                final String title = nl >= 0 ? s.substring(0, nl) : s;
+                final String sid = nl >= 0 ? s.substring(nl + 1).trim() : s;
+                showChoiceSheet(title, new String[]{"重命名", "归档"}, -1, new OnChosen() {
+                    @Override public void onChosen(int index) {
+                        if (index == 0) showRenameDialog(sid, title);
+                        else doArchive(sid);
+                    }
+                });
                 return true;
             }
         });
@@ -903,78 +937,6 @@ public class MainActivity extends Activity {
                 }
             }
         }).start();
-    }
-
-    /**
-     * 左滑露出操作按钮的行。
-     * 只在水平位移明显大于垂直位移时拦截，避免抢走 ListView 的竖向滚动。
-     */
-    private class SwipeRow extends FrameLayout {
-        private final View content;
-        private final View actions;
-        private final int panelW;
-        private final int slop;
-        private float downX, downY, startTx;
-        private boolean dragging;
-
-        SwipeRow(View content, View actions, int panelW) {
-            super(MainActivity.this);
-            this.content = content;
-            this.actions = actions;
-            this.panelW = panelW;
-            this.slop = android.view.ViewConfiguration.get(MainActivity.this).getScaledTouchSlop();
-            // 行是透明的（列表有背景图），按钮层不藏起来就会从行底下透出来
-            actions.setVisibility(View.INVISIBLE);
-            addView(actions, new LayoutParams(panelW, ViewGroup.LayoutParams.MATCH_PARENT,
-                    Gravity.END));
-            addView(content, new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT));
-        }
-
-        private void showActions(boolean show) {
-            actions.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
-        }
-
-        @Override
-        public boolean onInterceptTouchEvent(MotionEvent e) {
-            int a = e.getActionMasked();
-            if (a == MotionEvent.ACTION_DOWN) {
-                downX = e.getX();
-                downY = e.getY();
-                startTx = content.getTranslationX();
-                dragging = false;
-            } else if (a == MotionEvent.ACTION_MOVE) {
-                float dx = e.getX() - downX;
-                float dy = e.getY() - downY;
-                if (Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f) {
-                    dragging = true;
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent e) {
-            int a = e.getActionMasked();
-            if (a == MotionEvent.ACTION_MOVE) {
-                float tx = startTx + (e.getX() - downX);
-                if (tx > 0) tx = 0;
-                if (tx < -panelW) tx = -panelW;
-                content.setTranslationX(tx);
-                showActions(tx < 0);
-                return true;
-            }
-            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-                float tx = content.getTranslationX();
-                final boolean open = tx < -panelW / 2f;
-                content.animate().translationX(open ? -panelW : 0)
-                        .setDuration(150).start();
-                showActions(open);
-                return true;
-            }
-            return true;
-        }
     }
 
     /** 这一行的操作按钮（重命名 / 归档）。 */
