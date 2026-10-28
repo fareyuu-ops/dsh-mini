@@ -73,15 +73,19 @@ public class WsClient {
         new SecureRandom().nextBytes(nonce);
         String key = b64(nonce);
 
+        // 默认端口不能写出来：浏览器发 Origin 时 https 的 443 / http 的 80 都是省略的，
+        // 服务端按 Origin 严格比对，带上 :443 会 403（tailscale serve 场景实测）
+        String portPart = (tls && port == 443) || (!tls && port == 80) ? "" : (":" + port);
+
         StringBuilder sb = new StringBuilder();
         sb.append("GET ").append(path).append(" HTTP/1.1\r\n");
-        sb.append("Host: ").append(host).append(':').append(port).append("\r\n");
+        sb.append("Host: ").append(host).append(portPart).append("\r\n");
         sb.append("Upgrade: websocket\r\n");
         sb.append("Connection: Upgrade\r\n");
         sb.append("Sec-WebSocket-Key: ").append(key).append("\r\n");
         sb.append("Sec-WebSocket-Version: 13\r\n");
         // 浏览器会发 Origin，服务器通常拿它做来源校验；缺了会被直接断连（表现为 eof during handshake）
-        sb.append("Origin: ").append(tls ? "https://" : "http://").append(host).append(':').append(port).append("\r\n");
+        sb.append("Origin: ").append(tls ? "https://" : "http://").append(host).append(portPart).append("\r\n");
         sb.append("User-Agent: DshMini/0.1\r\n");
         if (headers != null) {
             for (Map.Entry<String, String> e : headers.entrySet()) {

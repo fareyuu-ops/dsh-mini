@@ -40,7 +40,11 @@ public class DshApi {
             this.host = uri.getHost();
             int p = uri.getPort();
             this.port = p > 0 ? p : (tls ? 443 : 80);
-            this.origin = (tls ? "https://" : "http://") + host + ":" + port;
+            // 默认端口不能写进 origin：DSH 按 Host 的 authority 签发 cookie，
+            // 写成 https://host:443 会让 cookie 的 authority 变成 "host:443"，
+            // 而 WS 握手的 Host 是 "host"（默认端口省略）→ 对不上 → 401。
+            boolean defaultPort = (tls && port == 443) || (!tls && port == 80);
+            this.origin = (tls ? "https://" : "http://") + host + (defaultPort ? "" : ":" + port);
         } catch (Exception e) {
             throw new IllegalArgumentException("bad base url: " + baseUrl, e);
         }
@@ -52,6 +56,9 @@ public class DshApi {
 
     /** 用 token 换 30 天 Cookie。 */
     public void login(String token) throws IOException {
+        // token 是 base64url（A-Za-z0-9_-）：复制时常混入换行/空格/零宽字符，
+        // 直接过滤掉非 token 字符，免得「长度 44」这种问题反复出现
+        token = token.replaceAll("[^A-Za-z0-9_\\-]", "");
         String url = origin + "/?token=" + token;
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setInstanceFollowRedirects(false);
@@ -60,7 +67,16 @@ public class DshApi {
         c.setRequestMethod("GET");
         try {
             int code = c.getResponseCode();
-            List<String> sc = c.getHeaderFields().get("Set-Cookie");
+            // 不能直接 get("Set-Cookie")：Android 的 getHeaderFields() 可能把 key 转成小写，
+            // 拿不到就会误报「no Set-Cookie」。这里忽略大小写遍历。
+            List<String> sc = null;
+            for (Map.Entry<String, List<String>> e : c.getHeaderFields().entrySet()) {
+                String k = e.getKey();
+                if (k != null && k.equalsIgnoreCase("set-cookie")) {
+                    sc = e.getValue();
+                    break;
+                }
+            }
             if (sc != null && !sc.isEmpty()) {
                 StringBuilder sb = new StringBuilder();
                 for (String s : sc) {
@@ -72,7 +88,17 @@ public class DshApi {
                 this.cookie = sb.toString();
             }
             if (this.cookie == null || this.cookie.isEmpty()) {
-                throw new IOException("login: no Set-Cookie (HTTP " + code + ")");
+                // 诊断：把实际收到的响应头打出来，一次定位是「没给 cookie」还是「给了没接住」
+                StringBuilder dbg = new StringBuilder();
+                for (Map.Entry<String, List<String>> e : c.getHeaderFields().entrySet()) {
+                    if (e.getKey() == null) continue;
+                    dbg.append(e.getKey()).append("=").append(e.getValue()).append("; ");
+                }
+                throw new IOException("login HTTP " + code
+                        + " origin=" + origin
+                        + " tokenLen=" + token.length()
+                        + " tokenHead=" + token.substring(0, Math.min(8, token.length()))
+                        + " headers=[" + dbg + "]");
             }
         } finally {
             c.disconnect();
